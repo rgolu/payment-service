@@ -1,4 +1,6 @@
 target/
+# Local presenter notes — never commit
+PRESENT.md
 .idea/
 *.iml
 .classpath
