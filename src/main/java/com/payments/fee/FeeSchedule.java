@@ -5,8 +5,8 @@ import com.payments.domain.money.Money;
 import java.util.List;
 
 /**
- * Tiered schedule with a floor. Live extension: append a {@link FeeTier}
- * (ordered by {@code upTo}, last tier {@code upTo == null}).
+ * Tiered schedule with a floor. Append a {@link FeeTier}
+ * (ordered by {@code upTo}; last tier {@code upTo == null}).
  */
 public record FeeSchedule(Money minFee, List<FeeTier> tiers) {
 

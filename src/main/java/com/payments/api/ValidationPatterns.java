@@ -1,9 +1,6 @@
 package com.payments.api;
 
-/**
- * Request regexes aligned with ppisvc {@code Constants}
- * ({@code PPI_REQUEST_ID_REGEX}, {@code ALPHANUM_SPACE_REGEX}, …).
- */
+/** Shared request regexes for IDs, names, and coupon codes. */
 public final class ValidationPatterns {
 
     public static final String ID = "^[a-zA-Z0-9_.-]+$";

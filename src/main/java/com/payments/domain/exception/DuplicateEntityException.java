@@ -1,6 +1,6 @@
 package com.payments.domain.exception;
 
-/** Same-key replay with a different payload — ppisvc {@code DuplicateEntityException}. */
+/** Same idempotency key replayed with a different payload. */
 public class DuplicateEntityException extends DomainException {
 
     public DuplicateEntityException(String message) {

@@ -9,9 +9,8 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 /**
- * In-memory stand-in for ppisvc {@code WalletLockExecutor}: try-acquire with
- * timeout, never run the critical section without the lock, always release in
- * {@code finally}.
+ * Try-acquire with timeout, never run the critical section without the lock,
+ * always release in {@code finally}.
  */
 public class LockExecutor {
 

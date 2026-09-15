@@ -5,12 +5,8 @@ import java.math.RoundingMode;
 import java.util.Objects;
 
 /**
- * INR amount as {@link BigDecimal} scaled to exactly 2 decimal places (HALF_UP),
- * same contract as ppisvc {@code @Digits(integer = 12, fraction = 2)}.
- *
- * <p>Integer paise and scale-2 BigDecimal are equivalent if scale is always
- * enforced. We use BigDecimal on the wire and in domain so request validation
- * matches Cashfree PPI ({@code amount} is rupees, not paise).
+ * INR amount as {@link BigDecimal} scaled to exactly 2 decimal places (HALF_UP).
+ * Request validation uses {@code @Digits(integer = 12, fraction = 2)}.
  */
 public final class Money implements Comparable<Money> {
 

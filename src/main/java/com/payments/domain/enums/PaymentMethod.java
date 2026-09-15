@@ -1,11 +1,7 @@
 package com.payments.domain.enums;
 
-/**
- * Seam for live extension: add a constant, then register a {@code FeeSchedule}
- * and a provider in {@code AppConfig} / {@code ProviderRegistry}.
- */
+/** Add a constant, then register a fee schedule and provider availability. */
 public enum PaymentMethod {
     UPI,
     CARD
-    // NETBANKING  ← live-extension hook
 }
