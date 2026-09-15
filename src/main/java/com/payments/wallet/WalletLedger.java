@@ -6,78 +6,50 @@ import com.payments.domain.model.Merchant;
 import com.payments.domain.model.User;
 import com.payments.domain.money.Money;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
-
 /**
- * Per-user (and per-merchant) locks so two payments cannot overdraw the same wallet.
- * The lock is taken before reading balance and released after the mutation.
+ * Wallet mutations always run inside {@link LockExecutor}. Caller may also
+ * hold an outer idempotency lock; lock order is {@code idemp:*} then {@code user:*}
+ * / {@code merchant:*} so we never deadlock.
  */
 public class WalletLedger {
 
-    private final ConcurrentHashMap<String, ReentrantLock> locks = new ConcurrentHashMap<>();
+    private final LockExecutor locks;
+
+    public WalletLedger(LockExecutor locks) {
+        this.locks = locks;
+    }
 
     public void topUp(User user, Money amount) {
-        ReentrantLock lock = lockFor("user:" + user.getId());
-        lock.lock();
-        try {
-            user.credit(amount);
-        } finally {
-            lock.unlock();
-        }
+        locks.execute("user:" + user.getId(), () -> user.credit(amount));
     }
 
     public void debitUser(User user, Money amount) {
-        ReentrantLock lock = lockFor("user:" + user.getId());
-        lock.lock();
-        try {
+        locks.execute("user:" + user.getId(), () -> {
             if (user.getWallet().compareTo(amount) < 0) {
                 throw new InsufficientBalanceException(
                         "insufficient balance: have " + user.getWallet() + ", need " + amount
                 );
             }
             user.debit(amount);
-        } finally {
-            lock.unlock();
-        }
+        });
     }
 
     public void creditUser(User user, Money amount) {
-        ReentrantLock lock = lockFor("user:" + user.getId());
-        lock.lock();
-        try {
-            user.credit(amount);
-        } finally {
-            lock.unlock();
-        }
+        locks.execute("user:" + user.getId(), () -> user.credit(amount));
     }
 
     public void creditMerchant(Merchant merchant, Money amount) {
-        ReentrantLock lock = lockFor("merchant:" + merchant.getId());
-        lock.lock();
-        try {
-            merchant.creditSettlement(amount);
-        } finally {
-            lock.unlock();
-        }
+        locks.execute("merchant:" + merchant.getId(), () -> merchant.creditSettlement(amount));
     }
 
     public void debitMerchant(Merchant merchant, Money amount) {
-        ReentrantLock lock = lockFor("merchant:" + merchant.getId());
-        lock.lock();
-        try {
+        locks.execute("merchant:" + merchant.getId(), () -> {
             if (merchant.getSettlement().compareTo(amount) < 0) {
                 throw new InvalidStateException(
                         "merchant settlement " + merchant.getSettlement() + " cannot cover refund " + amount
                 );
             }
             merchant.debitSettlement(amount);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private ReentrantLock lockFor(String key) {
-        return locks.computeIfAbsent(key, ignored -> new ReentrantLock());
+        });
     }
 }

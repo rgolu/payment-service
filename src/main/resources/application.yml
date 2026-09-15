@@ -4,6 +4,11 @@ server:
 spring:
   application:
     name: payment-service
+  jackson:
+    property-naming-strategy: SNAKE_CASE
 
 payments:
   routing-mode: FAILOVER
+  pending-ttl: 15m
+  lock-timeout: 5s
+  expiry-sweep-ms: 30000

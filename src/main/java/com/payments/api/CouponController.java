@@ -6,7 +6,10 @@ import com.payments.domain.enums.CouponType;
 import com.payments.domain.money.Money;
 import com.payments.service.CouponService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -15,6 +18,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import static com.payments.api.ValidationPatterns.COUPON_CODE;
+
+@Validated
 @RestController
 @RequestMapping("/api/coupons")
 public class CouponController {
@@ -43,7 +49,9 @@ public class CouponController {
 
     @DeleteMapping("/{code}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@PathVariable String code) {
+    public void delete(
+            @PathVariable @Size(max = 20) @Pattern(regexp = COUPON_CODE, message = "code must be alphanumeric") String code
+    ) {
         coupons.delete(code);
     }
 }

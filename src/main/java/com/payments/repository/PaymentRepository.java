@@ -14,4 +14,6 @@ public interface PaymentRepository {
     List<Payment> findByUserId(String userId);
 
     List<Payment> findByMerchantId(String merchantId);
+
+    List<Payment> findPending();
 }

@@ -2,6 +2,7 @@ package com.payments.api;
 
 import com.payments.api.dto.ErrorResponse;
 import com.payments.domain.exception.DomainException;
+import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -29,6 +30,15 @@ public class ApiExceptionHandler {
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .findFirst()
                 .map(err -> err.getField() + " " + err.getDefaultMessage())
+                .orElse("validation failed");
+        return ResponseEntity.badRequest().body(new ErrorResponse("ValidationError", message));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ErrorResponse> handleConstraint(ConstraintViolationException ex) {
+        String message = ex.getConstraintViolations().stream()
+                .findFirst()
+                .map(v -> v.getPropertyPath() + " " + v.getMessage())
                 .orElse("validation failed");
         return ResponseEntity.badRequest().body(new ErrorResponse("ValidationError", message));
     }

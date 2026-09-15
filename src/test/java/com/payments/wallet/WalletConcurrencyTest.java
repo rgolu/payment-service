@@ -30,12 +30,14 @@ class WalletConcurrencyTest {
         CountDownLatch start = new CountDownLatch(1);
         AtomicInteger successes = new AtomicInteger();
         AtomicInteger failures = new AtomicInteger();
+        AtomicInteger ids = new AtomicInteger();
 
         for (int i = 0; i < threads; i++) {
             pool.submit(() -> {
                 try {
                     start.await();
                     h.payments.initiate(
+                            "pay_race_" + ids.incrementAndGet(),
                             user.getId(), merchant.getId(), Money.rupees("20"), PaymentMethod.UPI, null
                     );
                     successes.incrementAndGet();

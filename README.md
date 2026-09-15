@@ -34,7 +34,11 @@ Server listens on `http://localhost:8080`. A timed walkthrough (including curl) 
 
 ## Assumptions (spec was silent — I decided)
 
-1. **Money is integer paise.** No `double`. Half-up to the nearest paisa.
+1. **Money is `BigDecimal` with scale 2 (HALF_UP)** — same contract as ppisvc `@Digits(integer = 12, fraction = 2)`. Integer paise and scale-2 decimal are equivalent *if* scale is always enforced; we use BigDecimal on the wire because that is how Cashfree PPI validates `amount`.
+1b. **Client `payment_id` / `credit_id` / `refund_id` are idempotency keys** (ppisvc `debit_id` / `credit_id`). Same key + same payload replays; same key + different payload is 409.
+1c. **PENDING expires after 15 minutes** (`payments.pending-ttl`). The hold is credited back and status becomes `EXPIRED`. Lazy on read + scheduled sweep.
+1d. **JSON is snake_case.** IDs `^[a-zA-Z0-9_.-]+$` max 50; names alphanumeric+space; amounts max 12 digits + 2 decimals.
+1e. **Locks are try-acquire (5s) + `finally` release.** Never run a wallet mutation without the lock (ppisvc `WalletLockExecutor`).
 2. **Two-phase payment.** `initiate` computes the full quote (principal + fee), **debits the user immediately**, and stores `PENDING`. `complete` **credits the merchant with the principal only**; the fee is platform revenue. This prevents overspend and makes "amount charged" deterministic at initiate time.
 3. **Fee example is the UPI schedule.** Card is more expensive (min ₹8; 2.5% / 2.0% / 1.5%) so "no extra fee" on UPI→Card reroute is a real, testable delta.
 4. **Tiers are marginal, not flat.** ₹6,000 UPI = `2000×2% + 3000×1.5% + 1000×1% = ₹95`. The `up_to` bound is inclusive of that band.
@@ -96,8 +100,7 @@ Mandatory fee-engine coverage lives in:
 ## What I would do with more time
 
 - Persist with a transactional store and an append-only ledger.
-- Idempotency keys on initiate/complete.
-- Expire stale `PENDING` payments and release the hold.
+- Redis lock (ppisvc `WalletLockExecutor`) instead of in-process `ReentrantLock`.
 - Split coupon calculators behind a strategy (the live-extension hint).
 - Outbox + merchant webhooks on complete/refund.
 - Property-based tests on the fee bands.

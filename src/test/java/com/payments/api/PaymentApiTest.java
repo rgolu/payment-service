@@ -30,18 +30,18 @@ class PaymentApiTest {
     void initiateAndCompleteThroughHttp() throws Exception {
         String userId = mapper.readTree(mvc.perform(post("/api/users")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Rishav\",\"initialBalance\":5000}"))
+                        .content("{\"name\":\"Rishav\",\"initial_balance\":5000}"))
                 .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString()).get("id").asText();
+                .andReturn().getResponse().getContentAsString()).get("user_id").asText();
 
         String merchantId = mapper.readTree(mvc.perform(post("/api/merchants")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Cafe\",\"supportedMethods\":[\"UPI\",\"CARD\"]}"))
+                        .content("{\"name\":\"Cafe\",\"supported_methods\":[\"UPI\",\"CARD\"]}"))
                 .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString()).get("id").asText();
+                .andReturn().getResponse().getContentAsString()).get("merchant_id").asText();
 
         String initiateBody = """
-                {"userId":"%s","merchantId":"%s","amount":1000,"method":"UPI"}
+                {"payment_id":"pay_demo_1","user_id":"%s","merchant_id":"%s","amount":1000.00,"method":"UPI"}
                 """.formatted(userId, merchantId);
 
         String initiated = mvc.perform(post("/api/payments/initiate")
@@ -50,10 +50,10 @@ class PaymentApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.fee").value(20.00))
-                .andExpect(jsonPath("$.amountCharged").value(1020.00))
+                .andExpect(jsonPath("$.amount_charged").value(1020.00))
                 .andReturn().getResponse().getContentAsString();
 
-        String paymentId = mapper.readTree(initiated).get("id").asText();
+        String paymentId = mapper.readTree(initiated).get("payment_id").asText();
 
         String completed = mvc.perform(post("/api/payments/" + paymentId + "/complete"))
                 .andExpect(status().isOk())
@@ -61,26 +61,46 @@ class PaymentApiTest {
                 .andReturn().getResponse().getContentAsString();
 
         JsonNode node = mapper.readTree(completed);
-        assertThat(node.get("amountCharged").decimalValue()).isEqualByComparingTo("1020.00");
+        assertThat(node.get("amount_charged").decimalValue()).isEqualByComparingTo("1020.00");
     }
 
     @Test
     void insufficientBalanceReturnsConflict() throws Exception {
         String userId = mapper.readTree(mvc.perform(post("/api/users")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Poor\",\"initialBalance\":10}"))
-                .andReturn().getResponse().getContentAsString()).get("id").asText();
+                        .content("{\"name\":\"Poor\",\"initial_balance\":10}"))
+                .andReturn().getResponse().getContentAsString()).get("user_id").asText();
         String merchantId = mapper.readTree(mvc.perform(post("/api/merchants")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Cafe\",\"supportedMethods\":[\"UPI\"]}"))
-                .andReturn().getResponse().getContentAsString()).get("id").asText();
+                        .content("{\"name\":\"Cafe\",\"supported_methods\":[\"UPI\"]}"))
+                .andReturn().getResponse().getContentAsString()).get("merchant_id").asText();
 
         mvc.perform(post("/api/payments/initiate")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"userId":"%s","merchantId":"%s","amount":1000,"method":"UPI"}
+                                {"payment_id":"pay_poor","user_id":"%s","merchant_id":"%s","amount":1000.00,"method":"UPI"}
                                 """.formatted(userId, merchantId)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("InsufficientBalanceException"));
+    }
+
+    @Test
+    void rejectsAmountWithMoreThanTwoDecimals() throws Exception {
+        mvc.perform(post("/api/users")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Rishav\",\"initial_balance\":10.001}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("ValidationError"));
+    }
+
+    @Test
+    void rejectsInvalidPaymentIdRegex() throws Exception {
+        mvc.perform(post("/api/payments/initiate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"payment_id":"pay id!","user_id":"usr_1","merchant_id":"mer_1","amount":100.00,"method":"UPI"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("ValidationError"));
     }
 }

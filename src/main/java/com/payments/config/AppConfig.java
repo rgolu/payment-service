@@ -25,17 +25,31 @@ import com.payments.service.CouponService;
 import com.payments.service.IdGenerator;
 import com.payments.service.MerchantService;
 import com.payments.service.PaymentService;
+import com.payments.service.PendingPaymentSweeper;
 import com.payments.service.UserService;
+import com.payments.wallet.LockExecutor;
 import com.payments.wallet.WalletLedger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.EnumMap;
 import java.util.Map;
 
 @Configuration
 public class AppConfig {
+
+    @Bean
+    public Clock clock() {
+        return Clock.systemUTC();
+    }
+
+    @Bean
+    public LockExecutor lockExecutor(@Value("${payments.lock-timeout:5s}") Duration lockTimeout) {
+        return new LockExecutor(lockTimeout);
+    }
 
     @Bean
     public UserRepository userRepository() {
@@ -58,8 +72,8 @@ public class AppConfig {
     }
 
     @Bean
-    public WalletLedger walletLedger() {
-        return new WalletLedger();
+    public WalletLedger walletLedger(LockExecutor locks) {
+        return new WalletLedger(locks);
     }
 
     @Bean
@@ -106,8 +120,8 @@ public class AppConfig {
     }
 
     @Bean
-    public UserService userService(UserRepository users, WalletLedger ledger, IdGenerator ids) {
-        return new UserService(users, ledger, ids);
+    public UserService userService(UserRepository users, WalletLedger ledger, LockExecutor locks, IdGenerator ids) {
+        return new UserService(users, ledger, locks, ids);
     }
 
     @Bean
@@ -131,10 +145,17 @@ public class AppConfig {
             CouponEngine couponEngine,
             RefundPolicy refunds,
             WalletLedger ledger,
-            IdGenerator ids
+            LockExecutor locks,
+            Clock clock,
+            @Value("${payments.pending-ttl:15m}") Duration pendingTtl
     ) {
         return new PaymentService(
-                users, merchants, coupons, payments, routing, fees, couponEngine, refunds, ledger, ids
+                users, merchants, coupons, payments, routing, fees, couponEngine, refunds, ledger, locks, clock, pendingTtl
         );
+    }
+
+    @Bean
+    public PendingPaymentSweeper pendingPaymentSweeper(PaymentService payments) {
+        return new PendingPaymentSweeper(payments);
     }
 }

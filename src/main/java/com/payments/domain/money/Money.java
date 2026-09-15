@@ -5,87 +5,97 @@ import java.math.RoundingMode;
 import java.util.Objects;
 
 /**
- * Immutable INR amount stored as integer paise so fee math never uses floating point.
+ * INR amount as {@link BigDecimal} scaled to exactly 2 decimal places (HALF_UP),
+ * same contract as ppisvc {@code @Digits(integer = 12, fraction = 2)}.
+ *
+ * <p>Integer paise and scale-2 BigDecimal are equivalent if scale is always
+ * enforced. We use BigDecimal on the wire and in domain so request validation
+ * matches Cashfree PPI ({@code amount} is rupees, not paise).
  */
 public final class Money implements Comparable<Money> {
 
-    public static final Money ZERO = new Money(0);
+    public static final int SCALE = 2;
+    public static final RoundingMode ROUNDING = RoundingMode.HALF_UP;
+    public static final Money ZERO = of(BigDecimal.ZERO);
 
-    private final long paise;
+    private final BigDecimal amount;
 
-    private Money(long paise) {
-        if (paise < 0) {
-            throw new IllegalArgumentException("Money cannot be negative");
-        }
-        this.paise = paise;
+    private Money(BigDecimal amount) {
+        this.amount = amount;
     }
 
-    public static Money ofPaise(long paise) {
-        return new Money(paise);
+    public static Money of(BigDecimal value) {
+        if (value == null) {
+            throw new IllegalArgumentException("amount is required");
+        }
+        if (value.signum() < 0) {
+            throw new IllegalArgumentException("Money cannot be negative");
+        }
+        return new Money(value.setScale(SCALE, ROUNDING));
     }
 
     public static Money rupees(String amount) {
-        return rupees(new BigDecimal(amount));
+        return of(new BigDecimal(amount));
     }
 
     public static Money rupees(BigDecimal amount) {
-        if (amount.signum() < 0) {
-            throw new IllegalArgumentException("Money cannot be negative");
-        }
-        long paise = amount.movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact();
-        return new Money(paise);
+        return of(amount);
     }
 
-    public long paise() {
-        return paise;
+    /** Test/legacy helper: 100 paise = ₹1.00. */
+    public static Money ofPaise(long paise) {
+        if (paise < 0) {
+            throw new IllegalArgumentException("Money cannot be negative");
+        }
+        return of(BigDecimal.valueOf(paise, SCALE));
+    }
+
+    public BigDecimal amount() {
+        return amount;
     }
 
     public BigDecimal rupees() {
-        return BigDecimal.valueOf(paise, 2);
+        return amount;
+    }
+
+    public long paise() {
+        return amount.movePointRight(SCALE).longValueExact();
     }
 
     public Money plus(Money other) {
-        return new Money(this.paise + other.paise);
+        return of(this.amount.add(other.amount));
     }
 
     public Money minus(Money other) {
-        if (this.paise < other.paise) {
+        if (this.amount.compareTo(other.amount) < 0) {
             throw new IllegalArgumentException("subtraction would be negative");
         }
-        return new Money(this.paise - other.paise);
+        return of(this.amount.subtract(other.amount));
     }
 
-    /**
-     * Apply a percent (2 means 2%). Rounded half-up to the nearest paisa.
-     */
+    /** {@code rate} is a percent (2 means 2%). */
     public Money percent(int rate) {
-        return ofPaise((this.paise * rate + 50) / 100);
+        return of(amount.multiply(BigDecimal.valueOf(rate))
+                .divide(BigDecimal.valueOf(100), SCALE, ROUNDING));
     }
 
-    /**
-     * Apply a rate in basis points (200 = 2%). Rounded half-up to the nearest paisa.
-     */
+    /** Basis points (200 = 2%). */
     public Money mulBps(int bps) {
-        return ofPaise((this.paise * bps + 5_000) / 10_000);
+        return of(amount.multiply(BigDecimal.valueOf(bps))
+                .divide(BigDecimal.valueOf(10_000), SCALE, ROUNDING));
     }
 
-    /**
-     * Multiply by a load factor (1.2 = +20%). Rounded half-up.
-     */
     public Money times(BigDecimal factor) {
-        BigDecimal product = BigDecimal.valueOf(paise)
-                .multiply(factor)
-                .setScale(0, RoundingMode.HALF_UP);
-        return ofPaise(product.longValueExact());
+        return of(amount.multiply(factor));
     }
 
     public boolean isZero() {
-        return paise == 0;
+        return amount.signum() == 0;
     }
 
     @Override
     public int compareTo(Money other) {
-        return Long.compare(this.paise, other.paise);
+        return this.amount.compareTo(other.amount);
     }
 
     @Override
@@ -96,16 +106,16 @@ public final class Money implements Comparable<Money> {
         if (!(o instanceof Money money)) {
             return false;
         }
-        return paise == money.paise;
+        return amount.compareTo(money.amount) == 0;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(paise);
+        return Objects.hash(amount.stripTrailingZeros());
     }
 
     @Override
     public String toString() {
-        return "₹" + rupees().toPlainString();
+        return "₹" + amount.toPlainString();
     }
 }

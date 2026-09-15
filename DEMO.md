@@ -13,8 +13,10 @@ Base URL: `http://localhost:8080`
 
 ## 0. Assumptions to say first (60 seconds)
 
-- Amounts are **paise internally**, rupees on the wire.
+- Amounts are **`BigDecimal` scale 2** (ppisvc `@Digits(12,2)`). Same safety as paise if scale is always enforced.
+- JSON is **snake_case**. IDs match `^[a-zA-Z0-9_.-]+$`. Client supplies **`payment_id`** (idempotency, like PPI `debit_id`).
 - **Initiate debits** `principal + fee`. **Complete credits** the merchant with **principal only**.
+- Pending payments **expire in 15 minutes** and release the wallet hold.
 - Spec fee bands = **UPI**. Card is costlier so reroute "at no extra fee" is visible.
 - Coupon cuts **principal**, then fee is computed on that.
 - Default routing is **FAILOVER** (UPI down → Card, still UPI price).
@@ -30,15 +32,15 @@ Save IDs from responses as you go.
 ```bash
 curl -s -X POST localhost:8080/api/users \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Rishav","initialBalance":5000}' | jq
+  -d '{"name":"Rishav","initial_balance":5000.00}' | jq
 
 curl -s -X POST localhost:8080/api/merchants \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Cafe Mocha","supportedMethods":["UPI","CARD"]}' | jq
+  -d '{"name":"Cafe Mocha","supported_methods":["UPI","CARD"]}' | jq
 
 curl -s -X POST localhost:8080/api/coupons \
   -H 'Content-Type: application/json' \
-  -d '{"code":"SAVE10","type":"PERCENT","value":10,"remainingUses":2}' | jq
+  -d '{"code":"SAVE10","type":"PERCENT","value":10,"remaining_uses":2}' | jq
 ```
 
 ### 1.2 Happy path — ₹1,000 UPI → fee ₹20, charged ₹1,020
@@ -46,10 +48,10 @@ curl -s -X POST localhost:8080/api/coupons \
 ```bash
 curl -s -X POST localhost:8080/api/payments/initiate \
   -H 'Content-Type: application/json' \
-  -d '{"userId":"USR","merchantId":"MER","amount":1000,"method":"UPI"}' | jq
+  -d '{"payment_id":"pay_demo_1","user_id":"USR","merchant_id":"MER","amount":1000.00,"method":"UPI"}' | jq
 
-curl -s -X POST localhost:8080/api/payments/PAY/complete | jq
-# amountCharged = 1020, merchant settlement = 1000
+curl -s -X POST localhost:8080/api/payments/pay_demo_1/complete | jq
+# amount_charged = 1020, merchant settlement = 1000
 ```
 
 **Talking point:** fee is platform revenue; merchant sees principal.
@@ -59,8 +61,8 @@ curl -s -X POST localhost:8080/api/payments/PAY/complete | jq
 ```bash
 curl -s -X POST localhost:8080/api/payments/initiate \
   -H 'Content-Type: application/json' \
-  -d '{"userId":"USR","merchantId":"MER","amount":100,"method":"UPI"}' | jq
-# fee = 5, amountCharged = 105
+  -d '{"payment_id":"pay_min","user_id":"USR","merchant_id":"MER","amount":100.00,"method":"UPI"}' | jq
+# fee = 5, amount_charged = 105
 ```
 
 ### 1.4 Edge — insufficient balance (no side effects)
@@ -68,11 +70,11 @@ curl -s -X POST localhost:8080/api/payments/initiate \
 ```bash
 curl -s -X POST localhost:8080/api/users \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Broke","initialBalance":10}' | jq
+  -d '{"name":"Broke","initial_balance":10.00}' | jq
 
 curl -s -X POST localhost:8080/api/payments/initiate \
   -H 'Content-Type: application/json' \
-  -d '{"userId":"BROKE","merchantId":"MER","amount":1000,"method":"UPI"}' | jq
+  -d '{"payment_id":"pay_broke","user_id":"BROKE","merchant_id":"MER","amount":1000.00,"method":"UPI"}' | jq
 # 409 InsufficientBalanceException; wallet still 10; no payment row
 ```
 
@@ -85,8 +87,8 @@ curl -s -X POST localhost:8080/api/admin/providers/UPI/availability \
 
 curl -s -X POST localhost:8080/api/payments/initiate \
   -H 'Content-Type: application/json' \
-  -d '{"userId":"USR","merchantId":"MER","amount":1000,"method":"UPI"}' | jq
-# rerouted=true, executedMethod=CARD, feeMethod=UPI, fee=20 (not Card's 25)
+  -d '{"payment_id":"pay_reroute","user_id":"USR","merchant_id":"MER","amount":1000.00,"method":"UPI"}' | jq
+# rerouted=true, executed_method=CARD, fee_method=UPI, fee=20 (not Card's 25)
 ```
 
 Turn UPI back on before the coupon step:
@@ -102,12 +104,12 @@ curl -s -X POST localhost:8080/api/admin/providers/UPI/availability \
 ```bash
 curl -s -X POST localhost:8080/api/payments/initiate \
   -H 'Content-Type: application/json' \
-  -d '{"userId":"USR","merchantId":"MER","amount":1000,"method":"UPI","couponCode":"SAVE10"}' | jq
-# discount=100, principal=900, fee=18, amountCharged=918
+  -d '{"payment_id":"pay_coupon","user_id":"USR","merchant_id":"MER","amount":1000.00,"method":"UPI","coupon_code":"SAVE10"}' | jq
+# discount=100, principal=900, fee=18, amount_charged=918
 
 curl -s -X POST localhost:8080/api/payments/initiate \
   -H 'Content-Type: application/json' \
-  -d '{"userId":"USR","merchantId":"MER","amount":1000,"method":"UPI","couponCode":"NOPE"}' | jq
+  -d '{"payment_id":"pay_bad","user_id":"USR","merchant_id":"MER","amount":1000.00,"method":"UPI","coupon_code":"NOPE"}' | jq
 # 400 CouponException
 ```
 
@@ -195,9 +197,9 @@ After the change: `mvn -q test` or the single test class.
 
 **Could cheapest routing still honour "no extra fee"?** Yes — pass `requested` as `feeMethod` when `requested == UPI && executed == CARD`. I did **not**, because cheapest is an optimiser, not a failover. Happy to add a one-liner if they want it live.
 
-**Idempotency?** Not built. Same initiate twice = two debits. I would key on `(userId, merchantId, amount, clientToken)`.
+**Idempotency?** Client `payment_id` (and `credit_id` / `refund_id`). Same payload replays; different payload is 409. Same pattern as PPI `debit_id`.
 
-**PENDING forever?** Yes, in this cut. Production: TTL + release hold.
+**PENDING forever?** No. TTL 15 minutes, then `EXPIRED` and the wallet hold is released (lazy + scheduled sweep).
 
 ---
 

@@ -1,5 +1,6 @@
 package com.payments.repository;
 
+import com.payments.domain.enums.PaymentStatus;
 import com.payments.domain.model.Payment;
 
 import java.util.Comparator;
@@ -35,6 +36,13 @@ public class InMemoryPaymentRepository implements PaymentRepository {
         return store.values().stream()
                 .filter(p -> p.getMerchantId().equals(merchantId))
                 .sorted(Comparator.comparing(Payment::getCreatedAt).reversed())
+                .toList();
+    }
+
+    @Override
+    public List<Payment> findPending() {
+        return store.values().stream()
+                .filter(p -> p.getStatus() == PaymentStatus.PENDING)
                 .toList();
     }
 }

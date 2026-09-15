@@ -1,5 +1,6 @@
 package com.payments.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.payments.domain.enums.CouponType;
 import com.payments.domain.model.Coupon;
 import com.payments.domain.money.Money;
@@ -8,14 +9,14 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 public record CouponResponse(
-        String code,
-        CouponType type,
-        BigDecimal value,
-        BigDecimal minAmount,
-        BigDecimal maxDiscount,
-        Integer remainingUses,
-        Instant expiresAt,
-        boolean active
+        @JsonProperty("code") String code,
+        @JsonProperty("type") CouponType type,
+        @JsonProperty("value") BigDecimal value,
+        @JsonProperty("min_amount") BigDecimal minAmount,
+        @JsonProperty("max_discount") BigDecimal maxDiscount,
+        @JsonProperty("remaining_uses") Integer remainingUses,
+        @JsonProperty("expires_at") Instant expiresAt,
+        @JsonProperty("active") boolean active
 ) {
 
     public static CouponResponse from(Coupon coupon) {
