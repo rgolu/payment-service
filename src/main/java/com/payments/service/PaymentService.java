@@ -129,11 +129,12 @@ public class PaymentService {
             Instant now = clock.instant();
             ledger.debitUser(user, total);
             if (coupon != null) {
+                final Coupon toConsume = coupon;
                 try {
-                    synchronized (coupon) {
-                        couponEngine.ensureApplicable(coupon, amount, now);
-                        coupon.consumeUse();
-                    }
+                    locks.execute("coupon:" + toConsume.getCode(), () -> {
+                        couponEngine.ensureApplicable(toConsume, amount, now);
+                        toConsume.consumeUse();
+                    });
                 } catch (RuntimeException ex) {
                     ledger.creditUser(user, total);
                     throw ex;
@@ -157,7 +158,7 @@ public class PaymentService {
             Merchant merchant = merchants.get(payment.getMerchantId());
             ledger.creditMerchant(merchant, payment.getQuote().principal());
             payment.markCompleted(clock.instant());
-            return payment;
+            return payments.save(payment);
         });
     }
 
@@ -182,7 +183,7 @@ public class PaymentService {
             ledger.debitMerchant(merchant, principal);
             ledger.creditUser(user, toUser);
             payment.markRefunded(refundId, refundFee, toUser, clock.instant());
-            return payment;
+            return payments.save(payment);
         });
     }
 
@@ -223,7 +224,7 @@ public class PaymentService {
             User user = users.get(payment.getUserId());
             ledger.creditUser(user, payment.getQuote().total());
             payment.markExpired(clock.instant(), "pending payment expired; wallet hold released");
-            return payment;
+            return payments.save(payment);
         });
     }
 }

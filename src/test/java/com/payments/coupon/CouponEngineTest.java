@@ -58,5 +58,13 @@ class CouponEngineTest {
         Coupon min = new Coupon("M", CouponType.PERCENT, 10, Money.rupees("500"), null, null, null);
         assertThatThrownBy(() -> engine.discount(min, Money.rupees("100"), now))
                 .isInstanceOf(CouponException.class);
+
+        Coupon badPercent = new Coupon("P", CouponType.PERCENT, 0, Money.ZERO, null, null, null);
+        assertThatThrownBy(() -> engine.discount(badPercent, Money.rupees("100"), now))
+                .isInstanceOf(CouponException.class);
+
+        Coupon badFlat = new Coupon("F", CouponType.FLAT, 0, Money.ZERO, null, null, null);
+        assertThatThrownBy(() -> engine.discount(badFlat, Money.rupees("100"), now))
+                .isInstanceOf(CouponException.class);
     }
 }

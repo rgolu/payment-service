@@ -5,8 +5,10 @@ import com.payments.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.EnumMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MethodFeePolicyTest {
 
@@ -39,5 +41,13 @@ class MethodFeePolicyTest {
         // Card untouched
         assertThat(policy.quoteFee(Money.rupees("1000"), PaymentMethod.CARD))
                 .isEqualTo(Money.rupees("25"));
+    }
+
+    @Test
+    void quoteFee_UnknownMethod_Throws() {
+        MethodFeePolicy policy = new MethodFeePolicy(new EnumMap<>(PaymentMethod.class), new IdentityFeeMultiplier());
+        policy.register(PaymentMethod.UPI, DefaultFeeSchedules.UPI);
+        assertThatThrownBy(() -> policy.quoteFee(Money.rupees("100"), PaymentMethod.CARD))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

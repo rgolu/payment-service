@@ -8,6 +8,7 @@ import com.payments.domain.exception.CouponException;
 import com.payments.domain.exception.DuplicateEntityException;
 import com.payments.domain.exception.InsufficientBalanceException;
 import com.payments.domain.exception.InvalidStateException;
+import com.payments.domain.exception.NotFoundException;
 import com.payments.domain.exception.PaymentException;
 import com.payments.domain.model.Merchant;
 import com.payments.domain.model.Payment;
@@ -19,10 +20,17 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.Set;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static com.payments.common.TestConstants.COUPON_SAVE10;
+import static com.payments.common.TestConstants.MERCHANT_NAME;
+import static com.payments.common.TestConstants.PAYMENT_ID;
+import static com.payments.common.TestConstants.POOR_USER_NAME;
+import static com.payments.common.TestConstants.REFUND_ID;
+import static com.payments.common.TestConstants.USER_NAME;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class PaymentServiceTest {
+public class PaymentServiceTest {
 
     private TestHarness h;
     private User user;
@@ -31,173 +39,293 @@ class PaymentServiceTest {
     @BeforeEach
     void setUp() {
         h = new TestHarness();
-        user = h.users.register("Rishav", Money.rupees("10000"));
-        merchant = h.merchants.register("Cafe", Set.of(PaymentMethod.UPI, PaymentMethod.CARD));
+        user = h.users.register(USER_NAME, Money.rupees("10000"));
+        merchant = h.merchants.register(MERCHANT_NAME, Set.of(PaymentMethod.UPI, PaymentMethod.CARD));
     }
 
-    private Payment pay(Money amount, PaymentMethod method, String coupon) {
+    private Payment initiate(Money amount, PaymentMethod method, String coupon) {
         return h.payments.initiate(h.nextPaymentId(), user.getId(), merchant.getId(), amount, method, coupon);
     }
 
     @Test
-    void initiateDebitsWalletAndCompleteCreditsMerchant() {
-        Payment pending = pay(Money.rupees("1000"), PaymentMethod.UPI, null);
-        assertThat(pending.getStatus()).isEqualTo(PaymentStatus.PENDING);
-        assertThat(pending.getQuote().fee()).isEqualTo(Money.rupees("20"));
-        assertThat(pending.amountCharged()).isEqualTo(Money.rupees("1020"));
-        assertThat(user.getWallet()).isEqualTo(Money.rupees("8980"));
-        assertThat(merchant.getSettlement()).isEqualTo(Money.ZERO);
+    void initiate_UpiThousand_DebitsWalletWithUpiFee() {
+        // GIVEN
+        Money amount = Money.rupees("1000");
 
+        // TEST
+        Payment pending = initiate(amount, PaymentMethod.UPI, null);
+
+        // VERIFY
+        assertEquals(PaymentStatus.PENDING, pending.getStatus());
+        assertEquals(Money.rupees("20"), pending.getQuote().fee());
+        assertEquals(Money.rupees("1020"), pending.amountCharged());
+        assertEquals(PaymentMethod.UPI, pending.getQuote().executedMethod());
+        assertEquals(PaymentMethod.UPI, pending.getQuote().feeMethod());
+        assertEquals(Money.rupees("8980"), user.getWallet());
+        assertEquals(Money.ZERO, merchant.getSettlement());
+    }
+
+    @Test
+    void complete_PendingPayment_CreditsMerchantPrincipal() {
+        // GIVEN
+        Payment pending = initiate(Money.rupees("1000"), PaymentMethod.UPI, null);
+
+        // TEST
         Payment done = h.payments.complete(pending.getId());
-        assertThat(done.getStatus()).isEqualTo(PaymentStatus.COMPLETED);
-        assertThat(done.amountCharged()).isEqualTo(Money.rupees("1020"));
-        assertThat(merchant.getSettlement()).isEqualTo(Money.rupees("1000"));
+
+        // VERIFY
+        assertEquals(PaymentStatus.COMPLETED, done.getStatus());
+        assertEquals(Money.rupees("1020"), done.amountCharged());
+        assertEquals(Money.rupees("1000"), merchant.getSettlement());
     }
 
     @Test
-    void insufficientBalanceIsRejectedWithoutSideEffects() {
-        User poor = h.users.register("Poor", Money.rupees("10"));
-        assertThatThrownBy(() -> h.payments.initiate(
+    void initiate_InsufficientBalance_ThrowsWithoutDebit() {
+        // GIVEN
+        User poor = h.users.register(POOR_USER_NAME, Money.rupees("10"));
+
+        // TEST
+        assertThrows(InsufficientBalanceException.class, () -> h.payments.initiate(
                 h.nextPaymentId(), poor.getId(), merchant.getId(), Money.rupees("1000"), PaymentMethod.UPI, null
-        )).isInstanceOf(InsufficientBalanceException.class);
-        assertThat(poor.getWallet()).isEqualTo(Money.rupees("10"));
-        assertThat(h.payments.historyForUser(poor.getId())).isEmpty();
+        ));
+
+        // VERIFY
+        assertEquals(Money.rupees("10"), poor.getWallet());
+        assertTrue(h.payments.historyForUser(poor.getId()).isEmpty());
     }
 
     @Test
-    void couponReducesPrincipalThenFeeIsQuotedOnDiscountedAmount() {
-        h.coupons.add("SAVE10", CouponType.PERCENT, 10, Money.ZERO, null, 1, null);
-        Payment payment = pay(Money.rupees("1000"), PaymentMethod.UPI, "SAVE10");
-        assertThat(payment.getQuote().discount()).isEqualTo(Money.rupees("100"));
-        assertThat(payment.getQuote().principal()).isEqualTo(Money.rupees("900"));
-        assertThat(payment.getQuote().fee()).isEqualTo(Money.rupees("18"));
-        assertThat(payment.amountCharged()).isEqualTo(Money.rupees("918"));
-        assertThat(user.getWallet()).isEqualTo(Money.rupees("9082"));
+    void initiate_CardThousand_ChargesHigherCardFee() {
+        // GIVEN
+        Money amount = Money.rupees("1000");
+
+        // TEST
+        Payment payment = initiate(amount, PaymentMethod.CARD, null);
+
+        // VERIFY
+        assertEquals(Money.rupees("25"), payment.getQuote().fee());
+        assertEquals(Money.rupees("1025"), payment.amountCharged());
+        assertEquals(PaymentMethod.CARD, payment.getQuote().feeMethod());
+        assertEquals(Money.rupees("8975"), user.getWallet());
     }
 
     @Test
-    void invalidCouponDoesNotDebit() {
+    void initiate_UpiProviderDown_ReroutesToCardAtUpiFee() {
+        // GIVEN
+        h.providers.setAvailable(PaymentMethod.UPI, false);
+
+        // TEST
+        Payment payment = initiate(Money.rupees("1000"), PaymentMethod.UPI, null);
+
+        // VERIFY
+        assertTrue(payment.getQuote().rerouted());
+        assertEquals(PaymentMethod.CARD, payment.getQuote().executedMethod());
+        assertEquals(PaymentMethod.UPI, payment.getQuote().feeMethod());
+        assertEquals(Money.rupees("20"), payment.getQuote().fee());
+        assertEquals(Money.rupees("1020"), payment.amountCharged());
+        assertEquals(Money.rupees("8980"), user.getWallet());
+    }
+
+    @Test
+    void initiate_PercentCoupon_FeesQuotedOnDiscountedPrincipal() {
+        // GIVEN
+        h.coupons.add(COUPON_SAVE10, CouponType.PERCENT, 10, Money.ZERO, null, 1, null);
+
+        // TEST
+        Payment payment = initiate(Money.rupees("1000"), PaymentMethod.UPI, COUPON_SAVE10);
+
+        // VERIFY
+        assertEquals(Money.rupees("100"), payment.getQuote().discount());
+        assertEquals(Money.rupees("900"), payment.getQuote().principal());
+        assertEquals(Money.rupees("18"), payment.getQuote().fee());
+        assertEquals(Money.rupees("918"), payment.amountCharged());
+        assertEquals(Money.rupees("9082"), user.getWallet());
+    }
+
+    @Test
+    void initiate_UnknownCoupon_DoesNotDebit() {
+        // GIVEN
         Money before = user.getWallet();
-        assertThatThrownBy(() -> pay(Money.rupees("1000"), PaymentMethod.UPI, "NOPE"))
-                .isInstanceOf(CouponException.class);
-        assertThat(user.getWallet()).isEqualTo(before);
+
+        // TEST
+        assertThrows(CouponException.class, () -> initiate(Money.rupees("1000"), PaymentMethod.UPI, "NOPE"));
+
+        // VERIFY
+        assertEquals(before, user.getWallet());
     }
 
     @Test
-    void deletedCouponIsRejected() {
+    void initiate_DeletedCoupon_Throws() {
+        // GIVEN
         h.coupons.add("GONE", CouponType.FLAT, 1000, Money.ZERO, null, null, null);
         h.coupons.delete("GONE");
-        assertThatThrownBy(() -> pay(Money.rupees("1000"), PaymentMethod.UPI, "GONE"))
-                .isInstanceOf(CouponException.class);
+
+        // TEST + VERIFY
+        assertThrows(CouponException.class, () -> initiate(Money.rupees("1000"), PaymentMethod.UPI, "GONE"));
     }
 
     @Test
-    void upiDowntimeReroutesToCardAtUpiFee() {
-        h.providers.setAvailable(PaymentMethod.UPI, false);
-        Payment payment = pay(Money.rupees("1000"), PaymentMethod.UPI, null);
-        assertThat(payment.getQuote().rerouted()).isTrue();
-        assertThat(payment.getQuote().executedMethod()).isEqualTo(PaymentMethod.CARD);
-        assertThat(payment.getQuote().feeMethod()).isEqualTo(PaymentMethod.UPI);
-        assertThat(payment.getQuote().fee()).isEqualTo(Money.rupees("20"));
-        assertThat(payment.getQuote().fee()).isLessThan(Money.rupees("25"));
-    }
-
-    @Test
-    void merchantMustSupportRequestedMethod() {
+    void initiate_MerchantLacksMethod_Throws() {
+        // GIVEN
         Merchant cards = h.merchants.register("POS", Set.of(PaymentMethod.CARD));
-        assertThatThrownBy(() -> h.payments.initiate(
+
+        // TEST + VERIFY
+        assertThrows(PaymentException.class, () -> h.payments.initiate(
                 h.nextPaymentId(), user.getId(), cards.getId(), Money.rupees("100"), PaymentMethod.UPI, null
-        )).isInstanceOf(PaymentException.class);
+        ));
     }
 
     @Test
-    void historyIncludesPendingAndCompleted() {
-        Payment a = pay(Money.rupees("100"), PaymentMethod.UPI, null);
-        Payment b = pay(Money.rupees("200"), PaymentMethod.CARD, null);
+    void initiate_ZeroAmount_Throws() {
+        assertThrows(InvalidStateException.class, () -> initiate(Money.ZERO, PaymentMethod.UPI, null));
+    }
+
+    @Test
+    void history_PendingAndCompleted_ReturnedForUserAndMerchant() {
+        // GIVEN
+        Payment a = initiate(Money.rupees("100"), PaymentMethod.UPI, null);
+        Payment b = initiate(Money.rupees("200"), PaymentMethod.CARD, null);
         h.payments.complete(a.getId());
 
-        assertThat(h.payments.historyForUser(user.getId()))
-                .extracting(Payment::getStatus)
-                .containsExactlyInAnyOrder(PaymentStatus.COMPLETED, PaymentStatus.PENDING);
-        assertThat(h.payments.historyForMerchant(merchant.getId())).hasSize(2);
-        assertThat(h.payments.get(b.getId()).getStatus()).isEqualTo(PaymentStatus.PENDING);
+        // TEST
+        var userHistory = h.payments.historyForUser(user.getId());
+        var merchantHistory = h.payments.historyForMerchant(merchant.getId());
+
+        // VERIFY
+        assertEquals(2, userHistory.size());
+        assertEquals(2, merchantHistory.size());
+        assertEquals(PaymentStatus.PENDING, h.payments.get(b.getId()).getStatus());
     }
 
     @Test
-    void completeIsIdempotent() {
-        Payment payment = pay(Money.rupees("100"), PaymentMethod.UPI, null);
+    void complete_AlreadyCompleted_IsIdempotent() {
+        // GIVEN
+        Payment payment = initiate(Money.rupees("100"), PaymentMethod.UPI, null);
         Payment first = h.payments.complete(payment.getId());
+
+        // TEST
         Payment second = h.payments.complete(payment.getId());
-        assertThat(second.getStatus()).isEqualTo(PaymentStatus.COMPLETED);
-        assertThat(second.getCompletedAt()).isEqualTo(first.getCompletedAt());
-        assertThat(merchant.getSettlement()).isEqualTo(Money.rupees("100"));
+
+        // VERIFY
+        assertEquals(PaymentStatus.COMPLETED, second.getStatus());
+        assertEquals(first.getCompletedAt(), second.getCompletedAt());
+        assertEquals(Money.rupees("100"), merchant.getSettlement());
     }
 
     @Test
-    void refundReturnsPrincipalMinusRefundFee() {
-        Payment payment = pay(Money.rupees("1000"), PaymentMethod.UPI, null);
+    void refund_CompletedPayment_ReturnsPrincipalMinusRefundFee() {
+        // GIVEN
+        Payment payment = initiate(Money.rupees("1000"), PaymentMethod.UPI, null);
         h.payments.complete(payment.getId());
         Money walletAfterPay = user.getWallet();
 
-        Payment refunded = h.payments.refund(payment.getId(), "ref_1");
-        assertThat(refunded.getStatus()).isEqualTo(PaymentStatus.REFUNDED);
-        assertThat(refunded.getRefundFee()).isEqualTo(Money.rupees("10"));
-        assertThat(refunded.getRefundedToUser()).isEqualTo(Money.rupees("990"));
-        assertThat(user.getWallet()).isEqualTo(walletAfterPay.plus(Money.rupees("990")));
-        assertThat(merchant.getSettlement()).isEqualTo(Money.ZERO);
+        // TEST
+        Payment refunded = h.payments.refund(payment.getId(), REFUND_ID);
+
+        // VERIFY
+        assertEquals(PaymentStatus.REFUNDED, refunded.getStatus());
+        assertEquals(Money.rupees("10"), refunded.getRefundFee());
+        assertEquals(Money.rupees("990"), refunded.getRefundedToUser());
+        assertEquals(walletAfterPay.plus(Money.rupees("990")), user.getWallet());
+        assertEquals(Money.ZERO, merchant.getSettlement());
     }
 
     @Test
-    void topUpIncreasesSpendableBalance() {
-        h.users.topUp(user.getId(), Money.rupees("50"), "crd_1");
-        assertThat(user.getWallet()).isEqualTo(Money.rupees("10050"));
+    void refund_PendingPayment_Throws() {
+        // GIVEN
+        Payment pending = initiate(Money.rupees("100"), PaymentMethod.UPI, null);
+
+        // TEST + VERIFY
+        assertThrows(InvalidStateException.class, () -> h.payments.refund(pending.getId(), REFUND_ID));
     }
 
     @Test
-    void samePaymentIdReplaysWithoutDoubleDebit() {
-        String paymentId = "pay_idem";
-        Payment first = h.payments.initiate(
-                paymentId, user.getId(), merchant.getId(), Money.rupees("1000"), PaymentMethod.UPI, null
-        );
-        Money afterFirst = user.getWallet();
-        Payment replay = h.payments.initiate(
-                paymentId, user.getId(), merchant.getId(), Money.rupees("1000"), PaymentMethod.UPI, null
-        );
-        assertThat(replay.getId()).isEqualTo(first.getId());
-        assertThat(user.getWallet()).isEqualTo(afterFirst);
-    }
-
-    @Test
-    void samePaymentIdDifferentPayloadConflicts() {
-        String paymentId = "pay_conflict";
-        h.payments.initiate(
-                paymentId, user.getId(), merchant.getId(), Money.rupees("1000"), PaymentMethod.UPI, null
-        );
-        assertThatThrownBy(() -> h.payments.initiate(
-                paymentId, user.getId(), merchant.getId(), Money.rupees("500"), PaymentMethod.UPI, null
-        )).isInstanceOf(DuplicateEntityException.class);
-    }
-
-    @Test
-    void pendingPaymentExpiresAndReleasesWalletHold() {
-        Payment pending = pay(Money.rupees("1000"), PaymentMethod.UPI, null);
-        assertThat(user.getWallet()).isEqualTo(Money.rupees("8980"));
-        h.clock.advance(Duration.ofMinutes(15));
-        Payment expired = h.payments.get(pending.getId());
-        assertThat(expired.getStatus()).isEqualTo(PaymentStatus.EXPIRED);
-        assertThat(user.getWallet()).isEqualTo(Money.rupees("10000"));
-        assertThatThrownBy(() -> h.payments.complete(pending.getId()))
-                .isInstanceOf(InvalidStateException.class);
-    }
-
-    @Test
-    void refundReplayWithSameRefundIdIsIdempotent() {
-        Payment payment = pay(Money.rupees("1000"), PaymentMethod.UPI, null);
+    void refund_ReplaySameRefundId_IsIdempotent() {
+        // GIVEN
+        Payment payment = initiate(Money.rupees("1000"), PaymentMethod.UPI, null);
         h.payments.complete(payment.getId());
         Payment first = h.payments.refund(payment.getId(), "ref_same");
+
+        // TEST
         Payment replay = h.payments.refund(payment.getId(), "ref_same");
-        assertThat(replay.getRefundedAt()).isEqualTo(first.getRefundedAt());
-        assertThatThrownBy(() -> h.payments.refund(payment.getId(), "ref_other"))
-                .isInstanceOf(DuplicateEntityException.class);
+
+        // VERIFY
+        assertEquals(first.getRefundedAt(), replay.getRefundedAt());
+        assertThrows(DuplicateEntityException.class, () -> h.payments.refund(payment.getId(), "ref_other"));
+    }
+
+    @Test
+    void topUp_CreditId_IncreasesSpendableBalance() {
+        // TEST
+        h.users.topUp(user.getId(), Money.rupees("50"), "crd_1");
+
+        // VERIFY
+        assertEquals(Money.rupees("10050"), user.getWallet());
+    }
+
+    @Test
+    void initiate_SamePaymentId_ReplaysWithoutDoubleDebit() {
+        // GIVEN
+        Payment first = h.payments.initiate(
+                PAYMENT_ID, user.getId(), merchant.getId(), Money.rupees("1000"), PaymentMethod.UPI, null
+        );
+        Money afterFirst = user.getWallet();
+
+        // TEST
+        Payment replay = h.payments.initiate(
+                PAYMENT_ID, user.getId(), merchant.getId(), Money.rupees("1000"), PaymentMethod.UPI, null
+        );
+
+        // VERIFY
+        assertEquals(first.getId(), replay.getId());
+        assertEquals(afterFirst, user.getWallet());
+    }
+
+    @Test
+    void initiate_SamePaymentIdDifferentPayload_Conflicts() {
+        // GIVEN
+        h.payments.initiate(
+                "pay_conflict", user.getId(), merchant.getId(), Money.rupees("1000"), PaymentMethod.UPI, null
+        );
+
+        // TEST + VERIFY
+        assertThrows(DuplicateEntityException.class, () -> h.payments.initiate(
+                "pay_conflict", user.getId(), merchant.getId(), Money.rupees("500"), PaymentMethod.UPI, null
+        ));
+    }
+
+    @Test
+    void get_PendingPastTtl_ExpiresAndReleasesWalletHold() {
+        // GIVEN
+        Payment pending = initiate(Money.rupees("1000"), PaymentMethod.UPI, null);
+        assertEquals(Money.rupees("8980"), user.getWallet());
+        h.clock.advance(Duration.ofMinutes(15));
+
+        // TEST
+        Payment expired = h.payments.get(pending.getId());
+
+        // VERIFY
+        assertEquals(PaymentStatus.EXPIRED, expired.getStatus());
+        assertEquals(Money.rupees("10000"), user.getWallet());
+        assertThrows(InvalidStateException.class, () -> h.payments.complete(pending.getId()));
+    }
+
+    @Test
+    void expireStale_PendingPastTtl_ExpiresAndCounts() {
+        // GIVEN
+        initiate(Money.rupees("100"), PaymentMethod.UPI, null);
+        h.clock.advance(Duration.ofMinutes(15));
+
+        // TEST
+        int expired = h.payments.expireStale();
+
+        // VERIFY
+        assertEquals(1, expired);
+        assertEquals(Money.rupees("10000"), user.getWallet());
+    }
+
+    @Test
+    void get_UnknownPayment_ThrowsNotFound() {
+        assertThrows(NotFoundException.class, () -> h.payments.get("pay_missing"));
     }
 }

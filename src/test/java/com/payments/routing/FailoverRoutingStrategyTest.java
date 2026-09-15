@@ -10,10 +10,12 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Set;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class FailoverRoutingStrategyTest {
+public class FailoverRoutingStrategyTest {
 
     private ProviderRegistry providers;
     private FailoverRoutingStrategy strategy;
@@ -29,40 +31,64 @@ class FailoverRoutingStrategyTest {
     }
 
     @Test
-    void usesRequestedMethodWhenUp() {
+    void route_RequestedMethodUp_UsesRequestedRail() {
+        // TEST
         RouteDecision decision = strategy.route(PaymentMethod.UPI, both);
-        assertThat(decision.executedMethod()).isEqualTo(PaymentMethod.UPI);
-        assertThat(decision.feeMethod()).isEqualTo(PaymentMethod.UPI);
-        assertThat(decision.rerouted()).isFalse();
+
+        // VERIFY
+        assertEquals(PaymentMethod.UPI, decision.executedMethod());
+        assertEquals(PaymentMethod.UPI, decision.feeMethod());
+        assertFalse(decision.rerouted());
     }
 
     @Test
-    void reroutesUpiToCardAtUpiFeeWhenProviderDown() {
+    void route_UpiDown_ReroutesToCardAtUpiFee() {
+        // GIVEN
         providers.setAvailable(PaymentMethod.UPI, false);
+
+        // TEST
         RouteDecision decision = strategy.route(PaymentMethod.UPI, both);
-        assertThat(decision.executedMethod()).isEqualTo(PaymentMethod.CARD);
-        assertThat(decision.feeMethod()).isEqualTo(PaymentMethod.UPI);
-        assertThat(decision.rerouted()).isTrue();
+
+        // VERIFY
+        assertEquals(PaymentMethod.CARD, decision.executedMethod());
+        assertEquals(PaymentMethod.UPI, decision.feeMethod());
+        assertTrue(decision.rerouted());
     }
 
     @Test
-    void doesNotRerouteWhenMerchantLacksCard() {
+    void route_UpiDownMerchantLacksCard_Throws() {
+        // GIVEN
         providers.setAvailable(PaymentMethod.UPI, false);
-        assertThatThrownBy(() -> strategy.route(PaymentMethod.UPI, upiOnly))
-                .isInstanceOf(PaymentException.class);
+
+        // TEST + VERIFY
+        assertThrows(PaymentException.class, () -> strategy.route(PaymentMethod.UPI, upiOnly));
     }
 
     @Test
-    void rejectsUnsupportedMethod() {
+    void route_UnsupportedMethod_Throws() {
+        // GIVEN
         Merchant cardOnly = new Merchant("m3", "Cards", Set.of(PaymentMethod.CARD));
-        assertThatThrownBy(() -> strategy.route(PaymentMethod.UPI, cardOnly))
-                .isInstanceOf(PaymentException.class);
+
+        // TEST + VERIFY
+        assertThrows(PaymentException.class, () -> strategy.route(PaymentMethod.UPI, cardOnly));
     }
 
     @Test
-    void cardDowntimeHasNoFallback() {
+    void route_CardDown_HasNoFallback() {
+        // GIVEN
         providers.setAvailable(PaymentMethod.CARD, false);
-        assertThatThrownBy(() -> strategy.route(PaymentMethod.CARD, both))
-                .isInstanceOf(ProviderUnavailableException.class);
+
+        // TEST + VERIFY
+        assertThrows(ProviderUnavailableException.class, () -> strategy.route(PaymentMethod.CARD, both));
+    }
+
+    @Test
+    void route_UpiAndCardDown_Throws() {
+        // GIVEN
+        providers.setAvailable(PaymentMethod.UPI, false);
+        providers.setAvailable(PaymentMethod.CARD, false);
+
+        // TEST + VERIFY
+        assertThrows(ProviderUnavailableException.class, () -> strategy.route(PaymentMethod.UPI, both));
     }
 }
